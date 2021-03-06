@@ -16,7 +16,11 @@ def ticker_history(ticker, window=21, start=None, end=None):  # UNDERSTAND ANN. 
 tmp = ticker_history("SPY", window=21, start="2019-01-01", end="2021-02-23")
 tmp.tail()
 
-def iron_condor(ticker="SPY", exp_date=None, wing_spread=10, short_delta=.16):
+
+def nearest(items, pivot):
+    return min(items, key=lambda x: abs(x - pivot))
+
+def iron_condor(ticker="SPY", exp_date=None, n_contracts=1, wing_spread=10, short_delta=.16):
     """ 
     pull data to give iron condor summary. 
     returns expiration date chain and management date chain
@@ -26,9 +30,6 @@ def iron_condor(ticker="SPY", exp_date=None, wing_spread=10, short_delta=.16):
     # e.g. get closes to 45 day and 21 day (for management) and use those as 'defaults'
     # Assumes shorts are ATM for now, can improve later. 
     # need to give max loss, net credit, cash equivalent, anything else?
-    def nearest(items, pivot):
-        return min(items, key=lambda x: abs(x - pivot))
-    
     chains = {}
     today = dt.datetime.today()
     if type(exp_date) == str:
@@ -53,27 +54,45 @@ def iron_condor(ticker="SPY", exp_date=None, wing_spread=10, short_delta=.16):
     manage_date = today + dt.timedelta(21)
     manage_date_chain = chains[nearest(chains.keys(), manage_date)]
         
-    return exp_date_chain, manage_date_chain
+#     return exp_date_chain, manage_date_chain
+    ########
+    call_chain["delta_diff"] = call_chain["delta"] - short_delta
+    put_chain["delta_diff"] = put_chain["delta"] + short_delta
+    short_call_row =  call_chain[call_chain["delta_diff"].min()] # not sure if this works exactly
+    short_put_row = put_chain[put_chain["delta_diff"].min()]
     
+    long_call_row = call_chain.loc[call_chain["strike"] == short_call_row["strike"] + wing_spread]] 
+    long_put_row = put_chain.loc[put_chain["strike"] == short_put_row["strike"] - wing_spread]] 
     
+    credit = short_call_row["price"] + short_put_row["price"]
+    debit = long_call_row["price"] + long_put_row["price"]
+    max_gain = (credit - debit) * 100 * n_contracts
     
+    max_loss = max(call_spread, put_spread) - debit  # again, hopefully ~ 30% of width
     
-  
+    print(f"pct of width is: {round(max_gain / wing_spread, 2)}")
+
+    # need to get spot price somewhere
+    # spot_price = ...
+    upper_breakeven = spot_price + (credit - debit)
+    lower_breakeven = spot_price - (credit - debit)
+    
+    #########
+    
   ### Black Scholes:
 # Note: t is % of year
 # MAKE SURE TO CHECK THESE. VALIDATE IF POSSIBLE
 # Would like to get historical vol. PoP/P50 as well? IVR, IVX, IV%
 
 class BlackScholes:
-    def __init__(self, s, k, sigma, t, price, r, q=1e-10, solver_default=.20):
+    def __init__(self, s, k, sigma, t, price, r, q=1e-10):  # if new IV works, can i change to 0?
         self.s = s  # have to set these as _fprime can take only one arg. is there a better way?
         self.k = k
         self.t = t
         self.q = q
         self.r = r
         self.price = price
-        self.solver_default = solver_default
-    
+        
     def _get_norm_cdf(self, d1):  # is this the same thing as scipy function?
         return (1 / sqrt(2*pi)) * exp(-d1**2 / 2)
     
@@ -82,7 +101,7 @@ class BlackScholes:
         d1 = self._get_d1(s, k, sigma, t, r, q)
         d2 = self._get_d2(d1, sigma, t)
         
-        return norm.cdf(d1)*s*exp(-q*t) - norm.cdf(d2)*k*exp(-r * t)
+        return norm.cdf(d1)*s*exp(-q*t) - norm.cdf(d2)*k*exp(-r*t)
         
     def put(self, s, k, sigma, t, r, q=1e-10):
         """ returns the put  price of an option according to BS """
@@ -117,7 +136,7 @@ class BlackScholes:
         d1 = self._get_d1(s, k, sigma, t, r, q)
         d2 = self._get_d2(d1, sigma, t)
         norm_cdf = self._get_norm_cdf(d1)
-        T = 252  #  T = days in a year -- calendar OR trading days. Why would it not be trading days?
+        T = 365.242199 #  T = days in a year -- calendar OR trading days. Why would it not be trading days?
         
         if option == "call":
             return (-(s*sigma*exp(-q*t) / 2*sqrt(t)*norm_cdf) - r*k*exp(-r*t)*norm.cdf(d2) + q*s*exp(-q*t)*norm.cdf(d1)) / T
@@ -140,42 +159,100 @@ class BlackScholes:
     def _get_d2(self, d1, t, r, q=1e-10): 
         """ calculate d2 for BS formula """
         return d1 - sigma * sqrt(t)
+
+    
+    def ivr(self):
+        """" calculate IV rank of the option """
+        raise NotImplementedError
+        
+    def ivp(self):
+        """" calculate IV% of the option """
+        raise NotImplementedError
+        
+        
+    def ivx(self, window=30):
+        """" calculate IV% of the option """
+        raise NotImplementedError 
+        
+    def pop(self):
+        """" calculate PoP of the option """
+        raise NotImplementedError 
+        
+    def p50(self):
+        """" calculate p50 of the option """
+        raise NotImplementedError 
             
         
-    def _fprime(self, sigma): 
-        """ 
-        f_prime is the function that computes the jacobian of the solver func with derivs across the rows 
-        Currently needs to have one param -- sigma
-        """
-        d1 = self._get_d1(self.s, self.k, sigma, self.t, self.r, self.q)
-        return s*sqrt(t)*norm.pdf(d1)*exp(-self.r*t)
+#     def _fprime(self, sigma): 
+#         """ 
+#         f_prime is the function that computes the jacobian of the solver func with derivs across the rows 
+#         Currently needs to have one param -- sigma
+#         """
+#         d1 = self._get_d1(self.s, self.k, sigma, self.t, self.r, self.q)
+#         return s*sqrt(t)*norm.pdf(d1)*exp(-self.r*t)
     
-    def BS(self, s, k, t, sigma, r, q, option="call"):
-            if option == 'call':
-                return self.call(s, k, sigma, t, r, q)
-            elif option == 'put':
-                return self.put(s, k, sigma, t, r, q)
+#     def BS(self, s, k, t, sigma, r, q, option="call"):
+#             if option == 'call':
+#                 return self.call(s, k, sigma, t, r, q)
+#             elif option == 'put':
+#                 return self.put(s, k, sigma, t, r, q)
         
-    def implied_vol(self, option="call"):
-        """ use scipy quadratic solver for implied volatility """
-        iv_func = lambda x: self.BS(self.s, self.k, x, self.t, self.r, self.q, option) - self.price  # x = sigma
-        iv = fsolve(iv_func, self.solver_default, fprime=self._fprime, xtol=1e-6)
+#     def implied_vol(self, option="call"):
+#         """ use scipy quadratic solver for implied volatility """
+#         iv_func = lambda x: self.BS(self.s, self.k, x, self.t, self.r, self.q, option) - self.price  # x = sigma
+#         iv = fsolve(iv_func, self.solver_default, fprime=self._fprime, xtol=1e-3)
         
-        return iv[0]
+#         return iv[0]
     
-# mess around with numbers
-s = 382.33
-k = 360
-sigma = .3103
-t =  25/365  # MAKE SURE THIS IS RIGHT
-price = 26.2
-rf = 0.014
-q = 0.0178
+    
+    def get_implied_volatility(self, max_iter=100, tol=1e-3):
+        """Guess the implied volatility."""
+        
+        # Set base case
+        known_min = 0
+        known_max = 10.0
+        try:
+            iv_guess = (
+                math.sqrt(2 * math.pi / self.t) * (self.price / self.k)
+            )
+        except TypeError:
+            print("TypeError in IV calculation. Returning NaN")
+            return np.nan
+            
+        if option == "call":
+            opt_val = self.call(self.s, self.k, iv_guess, self.t, self.r, self.q)
+        if option == "put":
+            opt_val = self.put(self.s, self.k, iv_guess, self.t, self.r, self.q)
+            
+        price_diff = opt_val - self.price
 
-bs_obj = BlackScholes(s=s, k=k, sigma=sigma, t=t, price=price, r=rf, q=q)
-bs_obj.BS(s=s, k=k, sigma=sigma, t=t, r=rf, q=q, option="call")  # why does this not work if q=0????
-bs_obj.call(s, k, sigma, t, rf, q)
+        # iterate until we can minimize difference between guess and actual price
+        iterations = 0
+        while abs(price_diff) > tol:
+            if price_diff > 0:  # if our guess is higher than the actual
+                known_max = iv_guess
+                iv_guess = (known_min + known_max) / 2
+            else:
+                known_min = iv_guess
+                iv_guess = (known_min + known_max) / 2
 
-bs_obj.implied_vol() 
+            if option == "call":
+                opt_val = self.call(self.s, self.k, iv_guess, self.t, self.r, self.q)
+            if option == "put":
+                opt_val = self.put(self.s, self.k, iv_guess, self.t, self.r, self.q)
+                
+            price_diff = opt_val - self.price
 
-bs_obj.delta(s, k, sigma, t, rf, q)
+            if iv_guess < 0.001:
+                return 0
+
+            iterations += 1
+            if iterations > max_iter:
+                print(f"Warning: Reached maximum number of iterations for "
+                      + f"implied volatility guess for strike {self.k}. "
+                      + f"Returning 0...")
+                return 0
+
+        return iv_guess
+   
+MbieG7gMB13pGPnFUNOsAtvUzv14
