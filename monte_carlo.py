@@ -180,54 +180,49 @@ class GeometricBrownianMotion:
     def __init__(self, initial_price, drift, volatility, dt, T):
         self.current_price = initial_price
         self.initial_price = initial_price
-        self.drift = drift
-        self.volatility = volatility
-        self.dt = dt
-        self.T = T
-        self.prices = []
-        self.simulate_paths()
+def generate_asset_price(s, sigma, r, t, q):  # would like to understand better
+    return s * exp((r - q - 0.5 * sigma**2) * t + sigma*sqrt(t) * gauss(0, 1.0))
 
-    def simulate_paths(self):
-        while(self.T - self.dt > 0):
-            dWt = np.random.normal(0, math.sqrt(self.dt))  # Brownian motion
-            dYt = self.drift*self.dt + self.volatility*dWt  # Change in price
-            self.current_price += dYt  # Add the change to the current price
-            self.prices.append(self.current_price)  # Append new price to series
-            self.T -= self.dt  # Accound for the step in time
+def mc_asset_price(s, sigma, r, t, q, n_paths=10000, option="call"):
+    """
+    use monte carlo simulation with n_paths to estimate price of an option
+    s: current spot price
+    k: strike price
+    sigma: volatility
+    r: risk-free rate
+    t: time-to-expiration (in years)
+    q: annualized dividend yield
+    """
+    future_prices = []
+    for i in range(n_paths):  
+        future_prices.append(generate_asset_price(s, sigma, r, t, q))
 
-
-# Model Parameters
-paths = 100
-initial_price = 100
-drift = .08
-volatility = .1
-dt = 1/365
-T = 1
-price_paths = []
-
-# Generate a set of sample paths
-for i in range(0, paths):
-    price_paths.append(GeometricBrownianMotion(initial_price, drift, volatility, dt, T).prices)
-
-# Plot the set of generated sample paths
-for price_path in price_paths:
-    plt.plot(price_path)
-plt.show()
+    return np.array(future_prices)
 
 
+def mc_option_price(s, k, sigma, r, t, q, n_paths=10000, option="call"):
+    """
+    use monte carlo simulation with n_paths to estimate price of an option
+    s: current spot price
+    k: strike price
+    sigma: volatility
+    r: risk-free rate
+    t: time-to-expiration (in years)
+    q: annualized dividend yield
+    """
+    payoffs = []
+    for i in range(n_paths):  
+        s_T = generate_asset_price(s, sigma, r, t, q)
+        if option == "call":
+            payoff = max(0, s_T - k)
+        else:
+            payoff = max(0, k - s_T)
 
+        payoffs.append(payoff)
 
-def line_plot(s):
+    discount_factor = exp(-r-q*t)
+    option_price = discount_factor * (sum(payoffs) / float(n_paths))
 
-    plt.plot(s[:, :100])
-    plt.grid(True)
-    plt.xlabel('Steps')
-    plt.ylabel('Index level');
+    return option_price
 
-def hist(s):
-    plt.rcParams["figure.figsize"] = (15,8)
-    plt.hist(s[-1], bins=50)
-    plt.grid(True)
-    plt.xlabel('index level')
-    plt.ylabel('frequency');
-    
+# TODO: Plotting
